@@ -3,11 +3,18 @@
 # See the file 'docs/LICENSE' for copying permission.
 
 import os
-import re
-import struct
 import socket
+import struct
+import tempfile
 import logging
+import dns.resolver
+from collections import OrderedDict
 from urlparse import urlunparse
+
+try:
+    import re2 as re
+except ImportError:
+    import re
 
 from lib.cuckoo.common.abstracts import Processing
 from lib.cuckoo.common.config import Config
@@ -16,11 +23,11 @@ from lib.cuckoo.common.irc import ircMessage
 from lib.cuckoo.common.objects import File
 from lib.cuckoo.common.utils import convert_to_printable
 from lib.cuckoo.common.exceptions import CuckooProcessingError
-from dns.resolver import query
 from dns.reversename import from_address
 
 try:
     import GeoIP
+
     IS_GEOIP = True
     gi = GeoIP.new(GeoIP.GEOIP_MEMORY_CACHE)
 except ImportError:
@@ -28,6 +35,7 @@ except ImportError:
 
 try:
     import dpkt
+
     IS_DPKT = True
 except ImportError:
     IS_DPKT = False
@@ -36,15 +44,15 @@ except ImportError:
 # http://stackoverflow.com/questions/10665925/how-to-sort-huge-files-with-python
 # http://code.activestate.com/recipes/576755/
 import heapq
-from tempfile import gettempdir
 from itertools import islice
 from collections import namedtuple
 
-TMPD = gettempdir()
 Keyed = namedtuple("Keyed", ["key", "obj"])
 Packet = namedtuple("Packet", ["raw", "ts"])
 
 log = logging.getLogger(__name__)
+
+enabled_whitelist = Config("processing").network.dnswhitelist
 
 class Pcap:
     """Reads network data from PCAP file."""
@@ -70,9 +78,9 @@ class Pcap:
         # List containing all ICMP requests.
         self.icmp_requests = []
         # List containing all HTTP requests.
-        self.http_requests = {}
+        self.http_requests = OrderedDict()
         # List containing all DNS requests.
-        self.dns_requests = {}
+        self.dns_requests = OrderedDict()
         self.dns_answers = set()
         # List containing all SMTP requests.
         self.smtp_requests = []
@@ -82,13 +90,24 @@ class Pcap:
         self.irc_requests = []
         # Dictionary containing all the results of this processing.
         self.results = {}
+        # Config
+        self.config = Config()
+        # DNS Whitelist
+        self.domain_whitelist = [
+            # Certificate Trust Update domains
+            "^ocsp\.usertrust\.com$",
+            "^ocsp\.comodoca\.com$",
+            "^ctldl\.windowsupdate\.com$",
+            "^crl\.microsoft\.com$",
+        ]
+        self.ip_whitelist = set()
 
     def _dns_gethostbyname(self, name):
         """Get host by name wrapper.
         @param name: hostname.
         @return: IP address or blank
         """
-        if Config().processing.resolve_dns:
+        if self.config.processing.resolve_dns:
             ip = resolve(name)
         else:
             ip = ""
@@ -101,37 +120,33 @@ class Pcap:
                  a private network block.
         """
         networks = [
-            "0.0.0.0/8",
-            "10.0.0.0/8",
-            "100.64.0.0/10",
-            "127.0.0.0/8",
-            "169.254.0.0/16",
-            "172.16.0.0/12",
-            "192.0.0.0/24",
-            "192.0.2.0/24",
-            "192.88.99.0/24",
-            "192.168.0.0/16",
-            "198.18.0.0/15",
-            "198.51.100.0/24",
-            "203.0.113.0/24",
-            "240.0.0.0/4",
-            "255.255.255.255/32",
-            "224.0.0.0/4"
+            ("0.0.0.0", 8),
+            ("10.0.0.0", 8),
+            ("100.64.0.0", 10),
+            ("127.0.0.0", 8),
+            ("169.254.0.0", 16),
+            ("172.16.0.0", 12),
+            ("192.0.0.0", 24),
+            ("192.0.2.0", 24),
+            ("192.88.99.0", 24),
+            ("192.168.0.0", 16),
+            ("198.18.0.0", 15),
+            ("198.51.100.0", 24),
+            ("203.0.113.0", 24),
+            ("240.0.0.0", 4),
+            ("255.255.255.255", 32),
+            ("224.0.0.0", 4)
         ]
 
-        for network in networks:
-            try:
-                ipaddr = struct.unpack(">I", socket.inet_aton(ip))[0]
-
-                netaddr, bits = network.split("/")
-
+        try:
+            ipaddr = struct.unpack(">I", socket.inet_aton(ip))[0]
+            for netaddr, bits in networks:
                 network_low = struct.unpack(">I", socket.inet_aton(netaddr))[0]
-                network_high = network_low | (1 << (32 - int(bits))) - 1
-
+                network_high = network_low | (1 << (32 - bits)) - 1
                 if ipaddr <= network_high and ipaddr >= network_low:
                     return True
-            except:
-                continue
+        except:
+            pass
 
         return False
 
@@ -146,7 +161,7 @@ class Pcap:
             except:
                 log.error("Unable to GEOIP resolve %s" % ip)
         return cn
-            
+
     def _add_hosts(self, connection):
         """Add IPs to unique list.
         @param connection: connection data
@@ -167,20 +182,30 @@ class Pcap:
             pass
 
     def _enrich_hosts(self, unique_hosts):
-        enriched_hosts=[]
-	print(unique_hosts.__repr__())
+        enriched_hosts = []
+
+        if self.config.processing.reverse_dns:
+            d = dns.resolver.Resolver()
+            d.timeout = 5.0
+            d.lifetime = 5.0
+
         while unique_hosts:
             ip = unique_hosts.pop()
             inaddrarpa = ""
-            try:
-                inaddrarpa = query(from_address(ip), "PTR").rrset[0].to_text()
-            except:
-                pass
             hostname = ""
+            if self.config.processing.reverse_dns:
+                try:
+                    inaddrarpa = d.query(from_address(ip), "PTR").rrset[0].to_text()
+                except:
+                    pass
             for request in self.dns_requests.values():
                 for answer in request['answers']:
                     if answer["data"] == ip:
                         hostname = request["request"]
+                        break
+                if hostname:
+                    break
+
             enriched_hosts.append({"ip": ip, "country_name": self._get_cn(ip),
                                    "hostname": hostname, "inaddrarpa": inaddrarpa})
         return enriched_hosts
@@ -193,7 +218,7 @@ class Pcap:
         if self._check_http(data):
             self._add_http(conn, data)
         # SMTP.
-        if conn["dport"] == 25:
+        if conn["dport"] == 25 or conn["dport"] == 587:
             self._reassemble_smtp(conn, data)
         # IRC.
         if conn["dport"] != 21 and self._check_irc(data):
@@ -215,7 +240,7 @@ class Pcap:
         """
         try:
             return isinstance(icmp_data, dpkt.icmp.ICMP) and \
-                len(icmp_data.data) > 0
+                   len(icmp_data.data) > 0
         except:
             return False
 
@@ -228,7 +253,7 @@ class Pcap:
         if self._check_icmp(data):
             # If ICMP packets are coming from the host, it probably isn't
             # relevant traffic, hence we can skip from reporting it.
-            if conn["src"] == Config().resultserver.ip:
+            if conn["src"] == self.config.resultserver.ip:
                 return
 
             entry = {}
@@ -265,8 +290,8 @@ class Pcap:
         query = {}
 
         if dns.rcode == dpkt.dns.DNS_RCODE_NOERR or \
-                dns.qr == dpkt.dns.DNS_R or \
-                dns.opcode == dpkt.dns.DNS_QUERY or True:
+                        dns.qr == dpkt.dns.DNS_R or \
+                        dns.opcode == dpkt.dns.DNS_QUERY or True:
             # DNS question.
             try:
                 q_name = dns.qd[0].name
@@ -328,12 +353,12 @@ class Pcap:
                 elif answer.type == dpkt.dns.DNS_SOA:
                     ans["type"] = "SOA"
                     ans["data"] = ",".join([answer.mname,
-                                           answer.rname,
-                                           str(answer.serial),
-                                           str(answer.refresh),
-                                           str(answer.retry),
-                                           str(answer.expire),
-                                           str(answer.minimum)])
+                                            answer.rname,
+                                            str(answer.serial),
+                                            str(answer.refresh),
+                                            str(answer.retry),
+                                            str(answer.expire),
+                                            str(answer.minimum)])
                 elif answer.type == dpkt.dns.DNS_HINFO:
                     ans["type"] = "HINFO"
                     ans["data"] = " ".join(answer.text)
@@ -345,19 +370,27 @@ class Pcap:
                 query["answers"].append(ans)
 
             if dns.rcode == dpkt.dns.DNS_RCODE_NXDOMAIN:
-                ans = { }
+                ans = {}
                 ans["type"] = "NXDOMAIN"
                 ans["data"] = ""
                 query["answers"].append(ans)
+
+            if enabled_whitelist:
+                for reject in self.domain_whitelist:
+                    if re.match(reject, query["request"]):
+                        if query["answers"]:
+                            for addip in query["answers"]:
+                                self.ip_whitelist.add(addip["data"])
+                        return True
 
             self._add_domain(query["request"])
 
             reqtuple = query["type"], query["request"]
             if reqtuple not in self.dns_requests:
                 self.dns_requests[reqtuple] = query
-            else:
-                new_answers = set((i["type"], i["data"]) for i in query["answers"]) - self.dns_answers
-                self.dns_requests[reqtuple]["answers"] += [dict(type=i[0], data=i[1]) for i in new_answers]
+            new_answers = set((i["type"], i["data"]) for i in query["answers"]) - self.dns_answers
+            self.dns_answers.update(new_answers)
+            self.dns_requests[reqtuple]["answers"] += [dict(type=i[0], data=i[1]) for i in new_answers]
 
         return True
 
@@ -392,7 +425,7 @@ class Pcap:
             r.unpack(tcpdata)
         except dpkt.dpkt.UnpackError:
             if r.method is not None or r.version is not None or \
-                    r.uri is not None:
+                            r.uri is not None:
                 return True
             return False
 
@@ -416,7 +449,9 @@ class Pcap:
         try:
             entry = {"count": 1}
 
-            if "host" in http.headers and re.match(r'^([A-Z0-9]|[A-Z0-9][A-Z0-9\-]{0,61}[A-Z0-9])(\.([A-Z0-9]|[A-Z0-9][A-Z0-9\-]{0,61}[A-Z0-9]))+(:[0-9]{1,5})?$', http.headers["host"], re.IGNORECASE):
+            if "host" in http.headers and re.match(
+                    r'^([A-Z0-9]|[A-Z0-9][A-Z0-9\-]{0,61}[A-Z0-9])(\.([A-Z0-9]|[A-Z0-9][A-Z0-9\-]{0,61}[A-Z0-9]))+(:[0-9]{1,5})?$',
+                    http.headers["host"], re.IGNORECASE):
                 entry["host"] = convert_to_printable(http.headers["host"])
             else:
                 entry["host"] = conn["dst"]
@@ -467,7 +502,8 @@ class Pcap:
         for conn, data in self.smtp_flow.iteritems():
             # Detect new SMTP flow.
             if data.startswith(("EHLO", "HELO")):
-                self.smtp_requests.append({"dst": conn, "raw": data})
+                self.smtp_requests.append({"dst": conn, 
+                                           "raw": convert_to_printable(data)})
 
     def _check_irc(self, tcpdata):
         """
@@ -492,15 +528,15 @@ class Pcap:
             reqc = ircMessage()
             reqs = ircMessage()
             filters_sc = ["266"]
-	    client = reqc.getClientMessages(tcpdata)
-	    for message in client:
-		message.update(conn)
-	    server = reqs.getServerMessagesFilter(tcpdata, filters_sc)
-	    for message in server:
-	        message.update(conn)
+            client = reqc.getClientMessages(tcpdata)
+            for message in client:
+                message.update(conn)
+            server = reqs.getServerMessagesFilter(tcpdata, filters_sc)
+            for message in server:
+                message.update(conn)
             self.irc_requests = self.irc_requests + \
-                client + \
-                server
+                                client + \
+                                server
         except Exception:
             return False
 
@@ -576,9 +612,11 @@ class Pcap:
                         connection["dport"] = tcp.dport
                         self._tcp_dissect(connection, tcp.data)
 
-                        src, sport, dst, dport = (connection["src"], connection["sport"], connection["dst"], connection["dport"])
-                        if not ((dst, dport, src, sport) in self.tcp_connections_seen or (src, sport, dst, dport) in self.tcp_connections_seen):
-                            self.tcp_connections.append((src, sport, dst, dport, offset, ts-first_ts))
+                        src, sport, dst, dport = (
+                            connection["src"], connection["sport"], connection["dst"], connection["dport"])
+                        if not ((dst, dport, src, sport) in self.tcp_connections_seen or (
+                                src, sport, dst, dport) in self.tcp_connections_seen):
+                            self.tcp_connections.append((src, sport, dst, dport, offset, ts - first_ts))
                             self.tcp_connections_seen.add((src, sport, dst, dport))
 
                 elif ip.p == dpkt.ip.IP_PROTO_UDP:
@@ -591,9 +629,11 @@ class Pcap:
                         connection["dport"] = udp.dport
                         self._udp_dissect(connection, udp.data)
 
-                        src, sport, dst, dport = (connection["src"], connection["sport"], connection["dst"], connection["dport"])
-                        if not ((dst, dport, src, sport) in self.udp_connections_seen or (src, sport, dst, dport) in self.udp_connections_seen):
-                            self.udp_connections.append((src, sport, dst, dport, offset, ts-first_ts))
+                        src, sport, dst, dport = (
+                            connection["src"], connection["sport"], connection["dst"], connection["dport"])
+                        if not ((dst, dport, src, sport) in self.udp_connections_seen or (
+                                src, sport, dst, dport) in self.udp_connections_seen):
+                            self.udp_connections.append((src, sport, dst, dport, offset, ts - first_ts))
                             self.udp_connections_seen.add((src, sport, dst, dport))
 
                 elif ip.p == dpkt.ip.IP_PROTO_ICMP:
@@ -616,6 +656,12 @@ class Pcap:
         # Post processors for reconstructed flows.
         self._process_smtp()
 
+        # Remove hosts that have an IP which correlate to a whitelisted domain
+        if enabled_whitelist:
+            for delip in self.ip_whitelist:
+                if delip in self.unique_hosts:
+                    self.unique_hosts.remove(delip)
+
         # Build results dict.
         self.results["hosts"] = self._enrich_hosts(self.unique_hosts)
         self.results["domains"] = self.unique_domains
@@ -628,6 +674,7 @@ class Pcap:
         self.results["irc"] = self.irc_requests
 
         return self.results
+
 
 class NetworkAnalysis(Processing):
     """Network analysis."""
@@ -651,7 +698,10 @@ class NetworkAnalysis(Processing):
         sorted_path = self.pcap_path.replace("dump.", "dump_sorted.")
         if Config().processing.sort_pcap:
             sort_pcap(self.pcap_path, sorted_path)
+            buf = Pcap(self.pcap_path).run()
             results = Pcap(sorted_path).run()
+            results["http"] = buf["http"]
+            results["dns"] = buf["dns"]
         else:
             results = Pcap(self.pcap_path).run()
 
@@ -662,6 +712,7 @@ class NetworkAnalysis(Processing):
             results["sorted_pcap_sha256"] = File(sorted_path).get_sha256()
 
         return results
+
 
 def iplayer_from_raw(raw, linktype=1):
     """Converts a raw packet to a dpkt packet regarding of link type.
@@ -677,12 +728,14 @@ def iplayer_from_raw(raw, linktype=1):
         raise CuckooProcessingError("unknown PCAP linktype")
     return ip
 
+
 def conn_from_flowtuple(ft):
     """Convert the flow tuple into a dictionary (suitable for JSON)"""
     sip, sport, dip, dport, offset, relts = ft
     return {"src": sip, "sport": sport,
             "dst": dip, "dport": dport,
             "offset": offset, "time": relts}
+
 
 # input_iterator should be a class that also supports writing so we can use
 # it for the temp files
@@ -699,7 +752,9 @@ def batch_sort(input_iterator, output_path, buffer_size=32000, output_class=None
             if not current_chunk:
                 break
             current_chunk.sort()
-            output_chunk = output_class(os.path.join(TMPD, "%06i" % len(chunks)))
+            fd, filepath = tempfile.mkstemp()
+            os.close(fd)
+            output_chunk = output_class(filepath)
             chunks.append(output_chunk)
 
             for elem in current_chunk:
@@ -718,6 +773,7 @@ def batch_sort(input_iterator, output_path, buffer_size=32000, output_class=None
             except Exception:
                 pass
 
+
 # magic
 class SortCap(object):
     """SortCap is a wrapper around the packet lib (dpkt) that allows us to sort pcaps
@@ -726,26 +782,30 @@ class SortCap(object):
     def __init__(self, path, linktype=1):
         self.name = path
         self.linktype = linktype
+        self.fileobj = None
         self.fd = None
         self.ctr = 0  # counter to pass through packets without flow info (non-IP)
         self.conns = set()
 
     def write(self, p):
-        if not self.fd:
-            self.fd = dpkt.pcap.Writer(open(self.name, "wb"), linktype=self.linktype)
+        if not self.fileobj:
+            self.fileobj = open(self.name, "wb")
+            self.fd = dpkt.pcap.Writer(self.fileobj, linktype=self.linktype)
         self.fd.writepkt(p.raw, p.ts)
 
     def __iter__(self):
-        if not self.fd:
-            self.fd = dpkt.pcap.Reader(open(self.name, "rb"))
+        if not self.fileobj:
+            self.fileobj = open(self.name, "rb")
+            self.fd = dpkt.pcap.Reader(self.fileobj)
             self.fditer = iter(self.fd)
             self.linktype = self.fd.datalink()
         return self
 
     def close(self):
-        if self.fd:
-            self.fd.close()
+        if self.fileobj:
+            self.fileobj.close()
         self.fd = None
+        self.fileobj = None
 
     def next(self):
         rp = next(self.fditer)
@@ -767,11 +827,13 @@ class SortCap(object):
         self.conns.add(flowtuple)
         return Keyed((flowtuple, ts, self.ctr), rpkt)
 
+
 def sort_pcap(inpath, outpath):
     """Use SortCap class together with batch_sort to sort a pcap"""
     inc = SortCap(inpath)
     batch_sort(inc, outpath, output_class=lambda path: SortCap(path, linktype=inc.linktype))
     return 0
+
 
 def flowtuple_from_raw(raw, linktype=1):
     """Parse a packet from a pcap just enough to gain a flow description tuple"""
@@ -794,6 +856,7 @@ def flowtuple_from_raw(raw, linktype=1):
     flowtuple = (sip, dip, sport, dport, proto)
     return flowtuple
 
+
 def payload_from_raw(raw, linktype=1):
     """Get the payload from a packet, the data below TCP/UDP basically"""
     ip = iplayer_from_raw(raw, linktype)
@@ -801,6 +864,7 @@ def payload_from_raw(raw, linktype=1):
         return ip.data.data
     except:
         return ""
+
 
 def next_connection_packets(piter, linktype=1):
     """Extract all packets belonging to the same flow from a pcap packet iterator"""
@@ -820,6 +884,7 @@ def next_connection_packets(piter, linktype=1):
             "raw": payload_from_raw(raw, linktype).encode("base64"),
             "direction": first_ft == ft,
         }
+
 
 def packets_for_stream(fobj, offset):
     """Open a PCAP, seek to a packet offset, then get all packets belonging to the same connection"""

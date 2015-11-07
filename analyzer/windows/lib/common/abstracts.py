@@ -2,9 +2,12 @@
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+import glob
 import os
 
+
 from lib.api.process import Process
+from lib.api.utils import Utils
 from lib.common.exceptions import CuckooPackageError
 
 class Package(object):
@@ -33,7 +36,7 @@ class Package(object):
         """Check."""
         return True
 
-    def _enum_paths(self):
+    def enum_paths(self):
         """Enumerate available paths."""
         for path in self.PATHS:
             basedir = path[0]
@@ -46,10 +49,10 @@ class Package(object):
                 elif sys32:
                     yield os.path.join(os.getenv("SystemRoot"), "sysnative", *path[2:])
             elif basedir == "ProgramFiles":
-                yield os.path.join(os.getenv("ProgramFiles"), *path[1:])
                 if os.getenv("ProgramFiles(x86)"):
                     yield os.path.join(os.getenv("ProgramFiles(x86)"),
                                        *path[1:])
+                yield os.path.join(os.getenv("ProgramFiles").replace(" (x86)", ""), *path[1:])
             elif basedir == "HomeDrive":
                 # os.path.join() does not work well when giving just C:
                 # instead of C:\\, so we manually add the backslash.
@@ -59,13 +62,26 @@ class Package(object):
                 yield os.path.join(*path)
 
     def get_path(self, application):
-        """Search for an application in all available paths.
-        @param applicaiton: application executable name
+        """Search for the application in all available paths.
+        @param application: application executable name
         @return: executable path
         """
-        for path in self._enum_paths():
-            if os.path.exists(path):
+        for path in self.enum_paths():
+            if os.path.isfile(path):
                 return path
+
+        raise CuckooPackageError("Unable to find any %s executable." %
+                                 application)
+
+    def get_path_glob(self, application):
+        """Search for the application in all available paths with glob support.
+        @param application: application executable name
+        @return: executable path
+        """
+        for path in self.enum_paths():
+            for path in glob.iglob(path):
+                if os.path.isfile(path):
+                    return path
 
         raise CuckooPackageError("Unable to find any %s executable." %
                                  application)
@@ -79,6 +95,12 @@ class Package(object):
         """
         dll = self.options.get("dll")
         free = self.options.get("free")
+        gw = self.options.get("setgw", None)
+
+        u = Utils()
+        if gw:
+            u.set_default_gw(gw)
+
         suspended = True
         if free:
             suspended = False
@@ -122,6 +144,7 @@ class Package(object):
         return True
 
 class Auxiliary(object):
-    def __init__(self, options={}):
+    def __init__(self, options={}, config=None):
         """@param options: options dict."""
         self.options = options
+        self.config = config

@@ -14,6 +14,8 @@ class Config:
             for name, raw_value in config.items(section):
                 if name == "file_name":
                     value = config.get(section, name)
+                    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+                        value = value[1:-1]
                 else:
                     try:
                         value = config.getboolean(section, name)
@@ -39,7 +41,7 @@ class Config:
             try:
                 # Split the options by comma.
                 fields = self.options.split(",")
-            except ValueError as e:
+            except (ValueError, AttributeError) as e:
                 pass
             else:
                 for field in fields:

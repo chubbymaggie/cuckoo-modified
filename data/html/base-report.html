@@ -32,6 +32,10 @@
 body {
     margin-top: 20px;
 }
+@page {
+    size: A3;
+    margin: 1cm;
+}
 .footer {
     margin-top: 45px;
     padding: 35px 0 36px;
@@ -86,11 +90,15 @@ img.fade:hover {
 .synchronization {
     background-color: #f9c5ff;
 }
+.browser {
+    background-color: #dfffdf;
+}
 </style>
 </head>
 <body>
 <div class="container-fluid">
     {% include "graphic/logo.html" %}
+    {% if not summary_report %}
     <div class="navbar navbar-inverse" style="margin-top: 10px;">
         <div class="navbar-inner">
             <div class="container-fluid">
@@ -104,26 +112,29 @@ img.fade:hover {
                         {% endif %}
                         <li><a href="#signatures">Signatures</a></li>
                         <li><a href="#screenshots">Screenshots</a></li>
+                        <li><a href="#network">Network</a></li>
                         {% if results.info.category == "file" %}
                         <li><a href="#static">Static</a></li>
                         {% endif %}
                         <li><a href="#dropped">Dropped</a></li>
-                        <li><a href="#network">Network</a></li>
                         <li><a href="#behavior">Behavior</a></li>
                         <li><a href="#volatility">Volatility</a></li>
-                        <!-- BOTTLEREMOVEME <li><a href="/pcap/{{results.info.id}}">PCAP</a></li> BOTTLEREMOVEME --!>
-                        <!-- BOTTLEREMOVEME <li><a href="/view/{{results.info.id}}/download">Download Report</a></li> BOTTLEREMOVEME --!>
-                        <!-- BOTTLEREMOVEME <li><li><a href="/files/{{results.info.id}}">Download Files</a></li>  BOTTLEREMOVEME --!>
+                        <!-- BOTTLEREMOVEME <li><a href="/pcap/{{results.info.id}}">PCAP</a></li> BOTTLEREMOVEME -->
+                        <!-- BOTTLEREMOVEME <li><a href="/view/{{results.info.id}}/download">Download Report</a></li> BOTTLEREMOVEME -->
+                        <!-- BOTTLEREMOVEME <li><li><a href="/files/{{results.info.id}}">Download Files</a></li>  BOTTLEREMOVEME -->
                     </ul>
                 </div>
             </div>
         </div>
     </div>
+    {% endif %}
     {% block content %}{% endblock %}
 
     <footer class="footer">
+        {% if not summary_report %}
         <p class="pull-right"><a href="#">Back to top</a></p>
-        <p>&copy;2010-2015 <a href="http://www.cuckoosandbox.org">Cuckoo Sandbox</a></p>
+        {% endif %}
+        <p>&copy;2010-2015 <a href="http://www.cuckoosandbox.org">Cuckoo Sandbox</a>, Optiv, Inc.</p>
     </footer>
 </div>
 <script>

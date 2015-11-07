@@ -15,14 +15,13 @@ from lib.cuckoo.common.constants import CUCKOO_ROOT
 from lib.cuckoo.common.exceptions import CuckooOperationalError
 from lib.cuckoo.common.exceptions import CuckooCriticalError
 from lib.cuckoo.common.exceptions import CuckooResultError
-from lib.cuckoo.common.netlog import NetlogParser, BsonParser
-from lib.cuckoo.common.utils import create_folder, Singleton, logtime
+from lib.cuckoo.common.netlog import BsonParser
+from lib.cuckoo.common.utils import create_folder, Singleton, logtime, sanitize_pathname
 
 log = logging.getLogger(__name__)
 
 BUFSIZE = 16 * 1024
 EXTENSIONS = {
-    NetlogParser: ".raw",
     BsonParser: ".bson",
 }
 
@@ -118,7 +117,6 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
 
         return os.path.join(CUCKOO_ROOT, "storage", "analyses", str(task.id))
 
-
 class ResultHandler(SocketServer.BaseRequestHandler):
     """Result handler.
 
@@ -139,6 +137,13 @@ class ResultHandler(SocketServer.BaseRequestHandler):
     def finish(self):
         self.done_event.set()
 
+        if self.protocol:
+            self.protocol.close()
+        if self.logfd:
+            self.logfd.close()
+        if self.rawlogfd:
+            self.rawlogfd.close()
+
     def wait_sock_or_end(self):
         while True:
             if self.end_request.isSet():
@@ -157,7 +162,7 @@ class ResultHandler(SocketServer.BaseRequestHandler):
                 raise Disconnect()
             buf += tmp
 
-        if isinstance(self.protocol, (NetlogParser, BsonParser)):
+        if isinstance(self.protocol, BsonParser):
             if self.rawlogfd:
                 self.rawlogfd.write(buf)
             else:
@@ -182,9 +187,7 @@ class ResultHandler(SocketServer.BaseRequestHandler):
         # Read until newline.
         buf = self.read_newline()
 
-        if "NETLOG" in buf:
-            self.protocol = NetlogParser(self)
-        elif "BSON" in buf:
+        if "BSON" in buf:
             self.protocol = BsonParser(self)
         elif "FILE" in buf:
             self.protocol = FileUpload(self, is_binary=False, duplicate=False)
@@ -225,13 +228,6 @@ class ResultHandler(SocketServer.BaseRequestHandler):
             log.exception("FIXME - exception in resultserver connection %s",
                           str(self.client_address))
 
-        if self.protocol:
-            self.protocol.close()
-
-        if self.logfd:
-            self.logfd.close()
-        if self.rawlogfd:
-            self.rawlogfd.close()
 
         log.debug("Connection closed: {0}:{1}".format(ip, port))
 
@@ -251,8 +247,8 @@ class ResultHandler(SocketServer.BaseRequestHandler):
             path = os.path.join(self.storagepath, "logs", "%d.csv" % pid)
             self.logfd = open(path, "wb")
 
-        # Raw Bson or Netlog extension.
-        ext = EXTENSIONS.get(type(self.protocol), ".raw")
+        # Raw Bson extension.
+        ext = EXTENSIONS.get(type(self.protocol), ".bson")
         path = os.path.join(self.storagepath, "logs", str(pid) + ext)
         self.rawlogfd = open(path, "wb")
         self.rawlogfd.write(self.startbuf)
@@ -262,6 +258,9 @@ class ResultHandler(SocketServer.BaseRequestHandler):
 
     def log_thread(self, context, pid):
         log.debug("New thread (tid={0}, pid={1})".format(context[3], pid))
+
+    def log_environ(self, context, environdict):
+        log.debug("Environ received for pid {0}".format(self.pid))
 
     def log_anomaly(self, subcategory, tid, funcname, msg):
         log.debug("Anomaly (tid=%s, category=%s, funcname=%s): %s",
@@ -294,7 +293,7 @@ class ResultHandler(SocketServer.BaseRequestHandler):
                     str(self.pid), str(self.procname), emsg)
 
     def create_folders(self):
-        folders = "shots", "files", "logs"
+        folders = "shots", "files", "logs", "aux"
 
         for folder in folders:
             try:
@@ -323,11 +322,13 @@ class FileUpload(object):
         buf = self.handler.read_newline().strip().replace("\\", "/")
         guest_path = ""
         if self.is_binary:
-            guest_path = self.handler.read_newline().strip()[:32768]
-
-        log.debug("File upload request for {0}".format(buf))
+            guest_path = sanitize_pathname(self.handler.read_newline().strip()[:32768])
 
         dir_part, filename = os.path.split(buf)
+        filename = sanitize_pathname(filename)
+        buf = os.path.join(dir_part, filename)
+
+        log.debug("File upload request for {0}".format(buf))
 
         if "./" in buf or not dir_part or buf.startswith("/"):
             raise CuckooOperationalError("FileUpload failure, banned path.")
@@ -342,7 +343,7 @@ class FileUpload(object):
             log.error("Unable to create folder %s" % dir_part)
             return False
 
-        file_path = os.path.join(self.storagepath, buf.strip())
+        file_path = os.path.join(self.storagepath, buf)
 
         if not file_path.startswith(self.storagepath):
             raise CuckooOperationalError("FileUpload failure, path sanitization failed.")
@@ -380,7 +381,6 @@ class FileUpload(object):
     def close(self):
         if self.fd:
             self.fd.close()
-
 
 class LogHandler(object):
     def __init__(self, handler):

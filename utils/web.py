@@ -10,7 +10,6 @@ import logging
 import argparse
 import zipfile
 from datetime import datetime, timedelta
-from health_statistics import HealthStatistics
 
 try:
     from jinja2.loaders import FileSystemLoader
@@ -165,42 +164,9 @@ def browse_page(page_id=1, new_limit=-1):
 
     return template.render({"rows": tasks, "os": os, "pagination": pagination})
 
-@route("/statistics")
-def statistics_page():
-    template = env.get_template("statistics.html")
-
-    hs = HealthStatistics(simple=True)
-    hs.datadir = os.path.join(CUCKOO_ROOT, "data", "html", "statistics")
-    stat_items = [("Processing stages",
-                   "Time spent in the separate processing stages",
-                   "/statistics_image/" + hs.processing_stages_pie()),
-                  ("Processing time",
-                   "Number of samples vs processing time",
-                   "/statistics_image/" + hs.processing_time_bar()),
-                  ("Task status",
-                   "Percent of samples in specific states",
-                   "/statistics_image/" + hs.task_status_pie()),
-                  ("Success by machine",
-                   "Task success by machine to identify damaged machines",
-                   "/statistics_image/" + hs.task_success_by_machine_bar()),
-                  ("Analysis issues",
-                   "Task analysis issues, global\nAnti issues are just logging if a sample tried something, we do not know if it was successfull",
-                   "/statistics_image/" + hs.task_analysis_pie()),
-                  ("Analysis issues by machine",
-                   "Task analysis issues, sorted by machine",
-                   "/statistics_image/" + hs.task_analysis_by_machine_bar()),
-                  ("Analysis issues by file type",
-                   "Task analysis issues, sorted by file type",
-                   "/statistics_image/" + hs.analysis_issues_by_file_type())]
-    return template.render({"stat_items": stat_items})
-
 @route("/static/<filename:path>")
 def server_static(filename):
     return static_file(filename, root=os.path.join(CUCKOO_ROOT, "data", "html"))
-
-@route("/statistics_image/<filename:path>")
-def server_generated_statistics(filename):
-    return static_file(filename, root=os.path.join(CUCKOO_ROOT, "data", "html", "statistics"))
 
 @route("/submit", method="POST")
 def submit():
@@ -238,25 +204,18 @@ def submit():
                                 "memory": memory})
 
     temp_file_path = store_temp_file(data.file.read(), data.filename)
-
-    task_id = db.add_path(file_path=temp_file_path,
-                          timeout=timeout,
-                          priority=priority,
-                          options=options,
-                          package=package,
-                          machine=machine,
-                          memory=memory)
-
-    if task_id:
+    task_ids = db.demux_sample_and_add_to_db(file_path=temp_file_path, package=package, timeout=timeout, options=options, priority=priority,
+                                             machine=machine, memory=memory)
+    tasks_count = len(task_ids)
+    if tasks_count > 0:
         template = env.get_template("success.html")
-        return template.render({"taskid": task_id,
-                            "submitfile": data.filename.decode("utf-8")})
+        return template.render({"tasks": task_ids, "tasks_count" : tasks_count})
     else:
         template = env.get_template("error.html")
         return template.render({"error": "The server encountered an internal error while submitting {0}".format(data.filename.decode("utf-8"))})
 
 @route("/view/<task_id>/download")
-def downlaod_report(task_id):
+def download_report(task_id):
     if not task_id.isdigit():
         return HTTPError(code=404, output="The specified ID is invalid")
 
@@ -280,7 +239,7 @@ def view(task_id):
     if not os.path.exists(report_path):
         return HTTPError(code=404, output="Report not found")
 
-    return open(report_path, "rb").read().replace("<!-- BOTTLEREMOVEME", "").replace("BOTTLEREMOVEME --!>", "")
+    return open(report_path, "rb").read().replace("<!-- BOTTLEREMOVEME", "").replace("BOTTLEREMOVEME -->", "")
 
 @route("/pcap/<task_id>")
 def get_pcap(task_id):

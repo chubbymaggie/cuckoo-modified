@@ -1,15 +1,23 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation, Accuvant, Inc. (bspengler@accuvant.com).
+# Copyright (C) 2010-2015 Cuckoo Foundation, Optiv, Inc. (brad.spengler@optiv.com).
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
 import os
-import re
+import requests
+import datetime
+import threading
 import logging
 import time
 
+try:
+    import re2 as re
+except ImportError:
+    import re
+    
 import xml.etree.ElementTree as ET
 
 from lib.cuckoo.common.config import Config
+from lib.cuckoo.common.constants import CUCKOO_ROOT
 from lib.cuckoo.common.exceptions import CuckooCriticalError
 from lib.cuckoo.common.exceptions import CuckooMachineError
 from lib.cuckoo.common.exceptions import CuckooOperationalError
@@ -35,6 +43,7 @@ class Auxiliary(object):
         self.task = None
         self.machine = None
         self.options = None
+        self.db = Database()
 
     def set_task(self, task):
         self.task = task
@@ -142,7 +151,7 @@ class Machinery(object):
                                     resultserver_port=port)
             except (AttributeError, CuckooOperationalError) as e:
                 log.warning("Configuration details about machine %s "
-                            "are missing: %s", machine_id, e)
+                            "are missing: %s", machine_id.strip(), e)
                 continue
 
     def _initialize_check(self):
@@ -599,11 +608,12 @@ class Processing(object):
     order = 1
     enabled = True
 
-    def __init__(self):
+    def __init__(self, results=None):
         self.analysis_path = ""
         self.logs_path = ""
         self.task = None
         self.options = None
+        self.results = results
 
     def set_options(self, options):
         """Set report options.
@@ -632,6 +642,12 @@ class Processing(object):
         self.pmemory_path = os.path.join(self.analysis_path, "memory")
         self.memory_path = os.path.join(self.analysis_path, "memory.dmp")
 
+    def add_statistic(self, name, field, value):
+        if name not in self.results["statistics"]["processing"]:
+            self.results["statistics"]["processing"][name] = { }
+
+        self.results["statistics"]["processing"][name][field] = value
+
     def run(self):
         """Start processing.
         @raise NotImplementedError: this method is abstract.
@@ -644,6 +660,8 @@ class Signature(object):
     name = ""
     description = ""
     severity = 1
+    confidence = 100
+    weight = 1
     categories = []
     families = []
     authors = []
@@ -662,6 +680,7 @@ class Signature(object):
     filter_processnames = set()
     filter_apinames = set()
     filter_categories = set()
+    filter_analysistypes = set()
 
     def __init__(self, results=None):
         self.data = []
@@ -671,6 +690,12 @@ class Signature(object):
         self._current_call_dict = None
         self._current_call_raw_cache = None
         self._current_call_raw_dict = None
+
+    def add_statistic(self, name, field, value):
+        if name not in self.results["statistics"]["signatures"]:
+            self.results["statistics"]["signatures"][name] = { }
+
+        self.results["statistics"]["signatures"][name][field] = value
 
     def _check_value(self, pattern, subject, regex=False, all=False, ignorecase=True):
         """Checks a pattern against a given subject.
@@ -869,6 +894,43 @@ class Signature(object):
                                  all=all,
                                  ignorecase=False)
 
+    def check_started_service(self, pattern, regex=False, all=False):
+        """Checks for a service being started.
+        @param pattern: string or expression to check for.
+        @param regex: boolean representing if the pattern is a regular
+                      expression or not and therefore should be compiled.
+        @param all: boolean representing if all results should be returned
+                      in a set or not
+        @return: depending on the value of param 'all', either a set of
+                      matched items or the first matched item
+        """
+        subject = self.results["behavior"]["summary"]["started_services"]
+        return self._check_value(pattern=pattern,
+                                 subject=subject,
+                                 regex=regex,
+                                 all=all,
+                                 ignorecase=True)
+
+
+    def check_executed_command(self, pattern, regex=False, all=False, ignorecase=True):
+        """Checks for a command being executed.
+        @param pattern: string or expression to check for.
+        @param regex: boolean representing if the pattern is a regular
+                      expression or not and therefore should be compiled.
+        @param all: boolean representing if all results should be returned
+                      in a set or not
+        @param ignorecase: whether the search should be performed case-insensitive
+                      or not
+        @return: depending on the value of param 'all', either a set of
+                      matched items or the first matched item
+        """
+        subject = self.results["behavior"]["summary"]["executed_commands"]
+        return self._check_value(pattern=pattern,
+                                 subject=subject,
+                                 regex=regex,
+                                 all=all,
+                                 ignorecase=ignorecase)
+
     def check_api(self, pattern, process=None, regex=False, all=False):
         """Checks for an API being called.
         @param pattern: string or expression to check for.
@@ -915,7 +977,8 @@ class Signature(object):
                             api=None,
                             category=None,
                             regex=False,
-                            all=False):
+                            all=False,
+                            ignorecase=False):
         """Checks for a specific argument of an invoked API.
         @param call: API call information.
         @param pattern: string or expression to check for.
@@ -926,6 +989,8 @@ class Signature(object):
                       expression or not and therefore should be compiled.
         @param all: boolean representing if all results should be returned
                       in a set or not
+        @param ignorecase: boolean representing whether the search is
+                    case-insensitive or not
         @return: depending on the value of param 'all', either a set of
                       matched items or the first matched item
         """
@@ -954,7 +1019,7 @@ class Signature(object):
                                  subject=argument["value"],
                                  regex=regex,
                                  all=all,
-                                 ignorecase=False)
+                                 ignorecase=ignorecase)
             if ret:
                 if all:
                     retset.update(ret)
@@ -973,7 +1038,8 @@ class Signature(object):
                        category=None,
                        process=None,
                        regex=False,
-                       all=False):
+                       all=False,
+                       ignorecase=False):
         """Checks for a specific argument of an invoked API.
         @param pattern: string or expression to check for.
         @param name: optional filter for the argument name.
@@ -984,6 +1050,8 @@ class Signature(object):
                       expression or not and therefore should be compiled.
         @param all: boolean representing if all results should be returned
                       in a set or not
+        @param ignorecase: boolean representing whether the search is
+                    case-insensitive or not
         @return: depending on the value of param 'all', either a set of
                       matched items or the first matched item
         """
@@ -1000,7 +1068,7 @@ class Signature(object):
             # Loop through API calls.
             for call in item["calls"]:
                 r = self.check_argument_call(call, pattern, name,
-                                             api, category, regex, all)
+                                             api, category, regex, all, ignorecase)
                 if r:
                     if all:
                         retset.update(r)
@@ -1023,6 +1091,9 @@ class Signature(object):
                       matched items or the first matched item
         """
 
+        if all:
+            retset = set()
+
         if not "network" in self.results:
             return None
 
@@ -1030,11 +1101,22 @@ class Signature(object):
         if not hosts:
             return None
 
-        return self._check_value(pattern=pattern,
-                                 subject=hosts,
+        for item in hosts:
+            ret = self._check_value(pattern=pattern,
+                                 subject=item["ip"],
                                  regex=regex,
                                  all=all,
                                  ignorecase=False)
+            if ret:
+                if all:
+                    retset.update(ret)
+                else:
+                    return item
+
+        if all and len(retset) > 0:
+            return retset
+
+        return None
 
     def check_domain(self, pattern, regex=False, all=False):
         """Checks for a domain being contacted.
@@ -1109,6 +1191,27 @@ class Signature(object):
             return retset
 
         return None
+
+    def get_initial_process(self):
+        """ Obtains the initial process information
+        @return: dict containing initial process information or None
+        """
+
+        if not "behavior" in self.results or not "processes" in self.results["behavior"] or not len(self.results["behavior"]["processes"]):
+            return None
+
+        return self.results["behavior"]["processes"][0]
+
+    def get_environ_entry(self, proc, env_name):
+        """ Obtains environment entry from process
+        @param proc: Process to inspect
+        @param env_name: Name of environment entry
+        @return: value of environment entry or None
+        """
+        if not proc or not "environ" in proc or not env_name in proc["environ"]:
+            return None
+
+        return proc["environ"][env_name]
 
     def get_argument(self, call, name):
         """Retrieves the value of a specific argument from an API call.
@@ -1211,6 +1314,8 @@ class Signature(object):
             name=self.name,
             description=self.description,
             severity=self.severity,
+            weight=self.weight,
+            confidence=self.confidence,
             references=self.references,
             data=self.data,
             new_data=self.new_data,
@@ -1262,3 +1367,73 @@ class Report(object):
         @raise NotImplementedError: this method is abstract.
         """
         raise NotImplementedError
+
+class Feed(object):
+    """Base abstract class for feeds."""
+    name = ""
+
+    def __init__(self):
+        self.data = ""
+        self.downloaddata = ""
+        self.downloadurl = ""
+        self.feedname = ""
+        self.feedpath = ""
+        # default to once per day
+        self.frequency = 24
+        self.updatefeed = False
+
+    def update(self):
+        """Determine if the feed needs to be updated based on the configured
+        frequency and update if it we have passed that time threshold.
+        """
+        self.feedpath = CUCKOO_ROOT + "/data/feeds/" + self.feedname + ".feed"
+        freq = self.frequency * 3600
+        # Check if feed file exists
+        mtime = 0
+        if os.path.isfile(self.feedpath):
+            mtime = os.path.getmtime(self.feedpath)
+            # Check if feed file is older than configured update frequency
+            if time.time() - mtime > freq:
+                self.updatefeed = True
+            else:
+                self.updatefeed = False
+        else:
+            self.updatefeed = True
+
+        if self.updatefeed:
+            headers = dict()
+            if mtime:
+                timestr = datetime.datetime.utcfromtimestamp(mtime).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                headers["If-Modified-Since"] = timestr
+            try:
+                req = requests.get(self.downloadurl, headers=headers, verify=True)
+            except requests.exceptions.RequestException as e:
+                log.warn("Error downloading feed for {0} : {1}".format(self.feedname, e))
+                return False
+            if req.status_code == 200:
+                self.downloaddata = req.content
+                return True
+
+        return False
+
+    def get_feedpath(self):
+        return self.feedpath
+
+    def modify(self):
+        """Modify data before saving it to the feed file.
+        @raise NotImplementedError: this method is abstract.
+        """
+        raise NotImplementedError
+
+    def run(self, modified=False):
+        if self.updatefeed:
+            lock = threading.Lock()
+            with lock:
+                if modified and self.data:
+                    with open(self.feedpath, "w") as feedfile:
+                        feedfile.write(self.data)
+                elif self.downloaddata:
+                    with open(self.feedpath, "w") as feedfile:
+                        feedfile.write(self.downloaddata)
+        return
+

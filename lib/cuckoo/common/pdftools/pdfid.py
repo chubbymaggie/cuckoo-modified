@@ -43,7 +43,6 @@ Todo:
 
 import optparse
 import os
-import re
 import xml.dom.minidom
 import traceback
 import math
@@ -52,6 +51,12 @@ import os.path
 import sys
 import json
 import zipfile
+
+try:
+    import re2 as re
+except ImportError:
+    import re
+
 try:
     import urllib2
     urllib23 = urllib2
@@ -197,6 +202,8 @@ class cPDFDate:
                     return None
 
 def fEntropy(countByte, countTotal):
+    if countTotal == 0:
+        return 0.0
     x = float(countByte) / countTotal
     if x > 0:
         return - x * math.log(x, 2)

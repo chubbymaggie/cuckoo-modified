@@ -1,5 +1,13 @@
-import re
+# Copyright (C) 2010-2015 Cuckoo Foundation, KillerInstinct
+# This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
+# See the file 'docs/LICENSE' for copying permission.
+
 import string
+
+try:
+    import re2 as re
+except ImportError:
+    import re
 
 from itertools import chain, repeat, izip
 from lib.cuckoo.common.utils import convert_to_printable

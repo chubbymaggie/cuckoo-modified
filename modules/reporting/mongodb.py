@@ -2,6 +2,7 @@
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+import logging
 import os
 
 from lib.cuckoo.common.abstracts import Report
@@ -11,15 +12,18 @@ from lib.cuckoo.common.objects import File
 
 try:
     from pymongo import MongoClient
-    from pymongo.errors import ConnectionFailure
+    from pymongo.errors import ConnectionFailure, InvalidDocument
     from gridfs import GridFS
     from gridfs.errors import FileExists
     HAVE_MONGO = True
 except ImportError:
     HAVE_MONGO = False
 
+log = logging.getLogger(__name__)
+
 class MongoDB(Report):
     """Stores report in MongoDB."""
+    order = 9999
 
     # Mongo schema version, used for data migration.
     SCHEMA_VERSION = "1"
@@ -67,6 +71,25 @@ class MongoDB(Report):
                 return self.db.fs.files.find_one(to_find)["_id"]
             else:
                 return new._id
+
+    def debug_dict_size(self, dct):
+        totals = dict((k, 0) for k in dct)
+        def walk(root, key, val):
+            if isinstance(val, dict):
+                for k, v in val.iteritems():
+                    walk(root, k, v)
+
+            elif isinstance(val, (list, tuple, set)):
+                for el in val:
+                    walk(root, None, el)
+
+            elif isinstance(val, basestring):
+                totals[root] += len(val)
+
+        for key, val in dct.iteritems():
+            walk(key, key, val)
+
+        return sorted(totals.items(), key=lambda item: item[1], reverse=True)
 
     def run(self, results):
         """Writes report.
@@ -255,6 +278,37 @@ class MongoDB(Report):
                 report["suri_file_cnt"] = len(results["suricata"]["files"])
             if results["suricata"].has_key("http") and len(results["suricata"]["http"]) > 0:
                 report["suri_http_cnt"] = len(results["suricata"]["http"])
+        
+        # Create an index based on the info.id dict key. Increases overall scalability
+        # with large amounts of data.
+        # Note: Silently ignores the creation if the index already exists.
+        self.db.analysis.create_index("info.id", background=True)
         # Store the report and retrieve its object id.
-        self.db.analysis.save(report)
-        self.conn.disconnect()
+        try:
+            self.db.analysis.save(report)
+        except InvalidDocument as e:
+            parent_key, psize = self.debug_dict_size(report)[0]
+            child_key, csize = self.debug_dict_size(report[parent_key])[0]
+            if not self.options.get("fix_large_docs", False):
+                # Just log the error and problem keys
+                log.error(str(e))
+                log.error("Largest parent key: %s (%d MB)" % (parent_key, int(psize) / 1048576))
+                log.error("Largest child key: %s (%d MB)" % (child_key, int(csize) / 1048576))
+            else:
+                # Delete the problem keys and check for more
+                error_saved = True
+                while error_saved:
+                    log.warn("results['%s']['%s'] deleted due to >16MB size (%dMB)" %
+                             (parent_key, child_key, int(psize) / 1048576))
+                    del report[parent_key][child_key]
+                    try:
+                        self.db.analysis.save(report)
+                        error_saved = False
+                    except InvalidDocument as e:
+                        parent_key, psize = self.debug_dict_size(report)[0]
+                        child_key, csize = self.debug_dict_size(report[parent_key])[0]
+                        log.error(str(e))
+                        log.error("Largest parent key: %s (%d bytes)" % (parent_key, int(psize) / 1048576))
+                        log.error("Largest child key: %s (%d bytes)" % (child_key, int(csize) / 1048576))
+
+        self.conn.close()

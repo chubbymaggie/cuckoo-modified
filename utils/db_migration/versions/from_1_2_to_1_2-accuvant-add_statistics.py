@@ -1,4 +1,4 @@
-# Copyright (C) 2015 Accuvant, Inc. (bspengler@accuvant.com), KillerInstinct, Cuckoo Foundation
+# Copyright (C) 2015 Optiv, Inc. (brad.spengler@optiv.com), KillerInstinct, Cuckoo Foundation
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -18,7 +18,6 @@ from alembic import op
 import sqlalchemy as sa
 
 import os.path
-import sqlalchemy as sa
 import sys
 from datetime import datetime
 
@@ -131,7 +130,7 @@ def _perform(upgrade):
         op.create_table(
             "tasks",
             sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("target", sa.String(length=255), nullable=False),
+            sa.Column("target", sa.Text(), nullable=False),
             sa.Column("category", sa.String(length=255), nullable=False),
             sa.Column("timeout", sa.Integer(), server_default="0", nullable=False),
             sa.Column("priority", sa.Integer(), server_default="1", nullable=False),
@@ -176,7 +175,7 @@ def _perform(upgrade):
         op.create_table(
             "tasks",
             sa.Column("id", sa.Integer(), nullable=False),
-            sa.Column("target", sa.String(length=255), nullable=False),
+            sa.Column("target", sa.Text(), nullable=False),
             sa.Column("category", sa.String(length=255), nullable=False),
             sa.Column("timeout", sa.Integer(), server_default="0", nullable=False),
             sa.Column("priority", sa.Integer(), server_default="1", nullable=False),

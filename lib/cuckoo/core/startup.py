@@ -16,6 +16,7 @@ import modules.auxiliary
 import modules.processing
 import modules.signatures
 import modules.reporting
+import modules.feeds
 
 from lib.cuckoo.common.colors import red, green, yellow, cyan
 from lib.cuckoo.common.config import Config
@@ -66,54 +67,38 @@ def check_configs():
 
     return True
 
+def check_signatures():
+    """Checks if user pulled in community signature modules
+    @raise CuckooStartupError: if community signature modules not installed.
+    """
+
+    sigpath = os.path.join(CUCKOO_ROOT, "modules", "signatures")
+    bad = False
+
+    if os.path.exists(sigpath):
+        path, dirs, files = os.walk(sigpath).next()
+        if len(files) < 20:
+            bad = True
+    else:
+        bad = True
+
+    if bad:
+        raise CuckooStartupError("Signature modules are not installed.  Please run: utils/community.py --force --rewrite --all")
+
 def create_structure():
     """Creates Cuckoo directories."""
     folders = [
         "log",
         "storage",
         os.path.join("storage", "analyses"),
-        os.path.join("storage", "binaries")
+        os.path.join("storage", "binaries"),
+        os.path.join("data", "feeds"),
     ]
 
     try:
         create_folders(root=CUCKOO_ROOT, folders=folders)
     except CuckooOperationalError as e:
         raise CuckooStartupError(e)
-
-def check_version():
-    """Checks version of Cuckoo."""
-    cfg = Config()
-
-    if not cfg.cuckoo.version_check:
-        return
-
-    print(" Checking for updates...")
-
-    url = "http://api.cuckoosandbox.org/checkversion.php"
-    data = urllib.urlencode({"version": CUCKOO_VERSION})
-
-    try:
-        request = urllib2.Request(url, data)
-        response = urllib2.urlopen(request)
-    except (urllib2.URLError, urllib2.HTTPError):
-        print(red(" Failed! ") + "Unable to establish connection.\n")
-        return
-
-    try:
-        response_data = json.loads(response.read())
-    except ValueError:
-        print(red(" Failed! ") + "Invalid response.\n")
-        return
-
-    if not response_data["error"]:
-        if response_data["response"] == "NEW_VERSION":
-            msg = "Cuckoo Sandbox version {0} is available " \
-                  "now.\n".format(response_data["current"])
-            print(red(" Outdated! ") + msg)
-        else:
-            print(green(" Good! ") + "You have the latest version "
-                                     "available.\n")
-
 
 class DatabaseHandler(logging.Handler):
     """Logging to database handler.
@@ -161,6 +146,8 @@ def init_logging():
 
     log.setLevel(logging.INFO)
 
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 def init_console_logging():
     """Initializes logging only to console."""
     formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -200,6 +187,8 @@ def init_modules():
     import_package(modules.signatures)
     # Import all reporting modules.
     import_package(modules.reporting)
+    # Import all feeds modules.
+    import_package(modules.feeds)
 
     # Import machine manager.
     import_plugin("modules.machinery." + Config().cuckoo.machinery)
@@ -293,9 +282,50 @@ def cuckoo_clean():
         try:
             conn = MongoClient(host, port)
             conn.drop_database(mdb)
-            conn.disconnect()
+            conn.close()
         except:
             log.warning("Unable to drop MongoDB database: %s", mdb)
+
+    # Check if ElasticSearch is enabled and delete that data if it is.
+    if cfg.elasticsearchdb and cfg.elasticsearchdb.enabled:
+        from elasticsearch import Elasticsearch
+        delidx = cfg.elasticsearchdb.index + "-*"
+        try:
+            es = Elasticsearch(
+                     hosts = [{
+                         "host": cfg.elasticsearchdb.host,
+                         "port": cfg.elasticsearchdb.port,
+                     }],
+                     timeout = 60
+                 )
+        except:
+            log.warning("Unable to connect to ElasticSearch")
+
+        if es:
+            analyses = es.search(
+                           index=delidx,
+                           doc_type="analysis",
+                           q="*"
+                       )["hits"]["hits"]
+        if analyses:
+            for analysis in analyses:
+                esidx = analysis["_index"]
+                esid = analysis["_id"]
+                # Check if behavior exists
+                if analysis["_source"]["behavior"]:
+                    for process in analysis["_source"]["behavior"]["processes"]:
+                        for call in process["calls"]:
+                            es.delete(
+                                index=esidx,
+                                doc_type="calls",
+                                id=call,
+                            )
+                # Delete the analysis results
+                es.delete(
+                    index=esidx,
+                    doc_type="analysis",
+                    id=esid,
+                )
 
     # Paths to clean.
     paths = [

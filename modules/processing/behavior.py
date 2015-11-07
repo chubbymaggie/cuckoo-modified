@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation, Accuvant, Inc. (bspengler@accuvant.com)
+# Copyright (C) 2010-2015 Cuckoo Foundation, Optiv, Inc. (brad.spengler@optiv.com)
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -9,8 +9,8 @@ import struct
 
 from lib.cuckoo.common.abstracts import Processing
 from lib.cuckoo.common.config import Config
-from lib.cuckoo.common.netlog import NetlogParser, BsonParser
-from lib.cuckoo.common.utils import convert_to_printable, pretty_print_arg, pretty_print_retval, logtime
+from lib.cuckoo.common.netlog import BsonParser
+from lib.cuckoo.common.utils import convert_to_printable, pretty_print_arg, pretty_print_retval, logtime, default_converter
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +36,15 @@ class ParseProcessLog(list):
         self.process_name = None
         self.parent_id = None
         self.module_path = None
+        # Using an empty initializer here allows the assignment of current_log.threads in the Processes run()
+        # method to get a reference to the threads list we eventually build up by fully parsing a log
+        # via the behavior analysis that happens later.  By the time the results dict is used later
+        # to extract this information, it will finally have valid info.
         self.threads = []
         self.first_seen = None
         self.calls = self
         self.lastcall = None
+        self.environdict = {}
         self.api_count = 0
         self.call_id = 0
         self.conversion_cache = {}
@@ -62,21 +67,24 @@ class ParseProcessLog(list):
             self.api_call_cache.append(None)
 
     def parse_first_and_reset(self):
-        """ Open file and either init Netlog or Bson Parser. Read till first process
+        """ Open file and init Bson Parser. Read till first process
         """
         self.fd = open(self._log_path, "rb")
 
         if self._log_path.endswith(".bson"):
             self.parser = BsonParser(self)
-        elif self._log_path.endswith(".raw"):
-            self.parser = NetlogParser(self)
         else:
             self.fd.close()
             self.fd = None
             return
 
-        # Get the process information from file to determine
-        # process id (file names.)
+        # Get the process information from file
+        # Note that we have to read in all messages until we
+        # get all the information we need, so the invariant below
+        # should involve the last process-related bit of
+        # information logged
+        # Environment info will be filled in as the log is read
+        # and will be stored by reference into the results dict
         while not self.process_id:
             self.parser.read_next_message()
 
@@ -199,6 +207,15 @@ class ParseProcessLog(list):
     def log_thread(self, context, pid):
         pass
 
+    def log_environ(self, context, environdict):
+        """ log user/process environment information for later use in behavioral signatures
+
+        @param context: ignored
+        @param environdict: dict of the various collected information, which will expand over time
+        """
+
+        self.environdict.update(environdict)
+
     def log_anomaly(self, subcategory, tid, funcname, msg):
         """ log an anomaly parsed from data file
 
@@ -298,14 +315,14 @@ class ParseProcessLog(list):
 
         call["timestamp"] = timestamp
         call["thread_id"] = str(thread_id)
-        call["caller"] = "0x%.08x" % caller
-        call["parentcaller"] = "0x%.08x" % parentcaller
+        call["caller"] = "0x%.08x" % default_converter(caller)
+        call["parentcaller"] = "0x%.08x" % default_converter(parentcaller)
         call["category"] = category
         call["api"] = api_name
         call["status"] = bool(int(status_value))
 
         if isinstance(return_value, int) or isinstance(return_value, long):
-            call["return"] = "0x%.08x" % return_value
+            call["return"] = "0x%.08x" % default_converter(return_value)
         else:
             call["return"] = convert_to_printable(str(return_value), self.conversion_cache)
 
@@ -371,7 +388,8 @@ class Processes:
                 "module_path": current_log.module_path,
                 "first_seen": logtime(current_log.first_seen),
                 "calls": current_log.calls,
-                "threads" : current_log.threads
+                "threads" : current_log.threads,
+                "environ" : current_log.environdict
             })
 
         # Sort the items in the results list chronologically. In this way we
@@ -397,6 +415,23 @@ class Summary:
         self.delete_files = []
         self.started_services = []
         self.created_services = []
+        self.executed_commands = []
+        self.resolved_apis = []
+
+    def get_argument(self, call, argname, strip=False):
+        for arg in call["arguments"]:
+            if arg["name"] == argname:
+                if strip:
+                    return arg["value"].strip()
+                else:
+                    return arg["value"]
+        return None
+
+    def get_raw_argument(self, call, argname):
+        for arg in call["arguments"]:
+            if arg["name"] == argname:
+                return arg["raw_value"]
+        return None
 
     def event_apicall(self, call, process):
         """Generate processes list from streamed calls/processes.
@@ -404,139 +439,116 @@ class Summary:
         """
 
         if call["api"].startswith("RegOpenKeyEx"):
-            name = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FullName":
-                    name = argument["value"]
+            name = self.get_argument(call, "FullName")
             if name and name not in self.keys:
                 self.keys.append(name)
         elif call["api"].startswith("RegSetValue") or call["api"] == "NtSetValueKey":
-            name = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FullName":
-                    name = argument["value"]
-
+            name = self.get_argument(call, "FullName")
             if name and name not in self.keys:
                self.keys.append(name)
             if name and name not in self.write_keys:
                self.write_keys.append(name)
         elif call["api"] == "NtDeleteValueKey" or call["api"] == "NtDeleteKey" or call["api"].startswith("RegDeleteValue"):
-            name = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FullName":
-                    name = argument["value"]
-
+            name = self.get_argument(call, "FullName")
             if name and name not in self.keys:
                self.keys.append(name)
             if name and name not in self.delete_keys:
                self.delete_keys.append(name)
         elif call["api"].startswith("RegCreateKeyEx"):
-            name = None
-            disposition = 0
-            for argument in call["arguments"]:
-                if argument["name"] == "FullName":
-                    name = argument["value"]
-                elif argument["name"] == "Disposition":
-                    disposition = int(argument["value"], 10)
-
+            name = self.get_argument(call, "FullName")
+            disposition = int(self.get_argument(call, "Disposition"), 10)
             if name and name not in self.keys:
                 self.keys.append(name)
             # if disposition == 1 then we created a new key
             if name and disposition == 1 and name not in self.write_keys:
                self.write_keys.append(name)
         elif call["api"].startswith("NtOpenKey"):
-            name = None
-            for argument in call["arguments"]:
-                if argument["name"] == "ObjectAttributes":
-                    name = argument["value"]
-
+            name = self.get_argument(call, "ObjectAttributes")
             if name and name not in self.keys:
                 self.keys.append(name)
         elif call["api"] == "NtCreateKey":
-            name = None
-            disposition = 0
-            for argument in call["arguments"]:
-                if argument["name"] == "ObjectAttributes":
-                    name = argument["value"]
-                elif argument["name"] == "Disposition":
-                    disposition = int(argument["value"], 10)
-
+            name = self.get_argument(call, "ObjectAttributes")
+            disposition = int(self.get_argument(call, "Disposition"), 10)
             if name and name not in self.keys:
                 self.keys.append(name)
             # if disposition == 1 then we created a new key
             if name and disposition == 1 and name not in self.write_keys:
                self.write_keys.append(name)
         elif call["api"].startswith("RegQueryValue") or call["api"] == "NtQueryValueKey" or call["api"] == "NtQueryMultipleValueKey":
-            name = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FullName":
-                    name = argument["value"]
-
+            name = self.get_argument(call, "FullName")
             if name and name not in self.keys:
                self.keys.append(name)
             if name and name not in self.read_keys:
                self.read_keys.append(name)
-        elif call["api"] == "ShellExecuteExW":
-            filename = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FilePath":
-                    filename = argument["value"]
-                    if len(filename) < 2 or filename[1] != ':':
-                        filename = None
+        elif call["api"] == "SHGetFileInfoW":
+            filename = self.get_argument(call, "Path")
+            if filename and (len(filename) < 2 or filename[1] != ':'):
+                filename = None
             if filename and filename not in self.files:
                 self.files.append(filename)
+        elif call["api"] == "ShellExecuteExW":
+            filename = self.get_argument(call, "FilePath")
+            if len(filename) < 2 or filename[1] != ':':
+                filename = None
+            if filename and filename not in self.files:
+                self.files.append(filename)
+            path = self.get_argument(call, "FilePath", strip=True)
+            params = self.get_argument(call, "Parameters", strip=True)
+            cmdline = None
+            if path:
+                cmdline = path + " " + params
+            if cmdline and cmdline not in self.executed_commands:
+                self.executed_commands.append(cmdline)
         elif call["api"] == "NtSetInformationFile":
-            filename = None
-            infoclass = None
-            fileinfo = None
-            for argument in call["arguments"]:
-                if argument["name"] == "HandleName":
-                    filename = argument["value"].strip()
-                elif argument["name"] == "FileInformationClass":
-                    infoclass = int(argument["value"], 10)
-                elif argument["name"] == "FileInformation":
-                    fileinfo = argument["raw_value"]
+            filename = self.get_argument(call, "HandleName")
+            infoclass = int(self.get_argument(call, "FileInformationClass"), 10)
+            fileinfo = self.get_raw_argument(call, "FileInformation")
             if filename and infoclass and infoclass == 13 and fileinfo and len(fileinfo) > 0:
                 disp = struct.unpack_from("B", fileinfo)[0]
                 if disp and filename not in self.delete_files:
                     self.delete_files.append(filename)
 
         elif call["api"].startswith("DeleteFile") or call["api"] == "NtDeleteFile" or call["api"].startswith("RemoveDirectory"):
-            filename = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FileName":
-                    filename = argument["value"].strip()
-                elif argument["name"] == "DirectoryName":
-                    filename = argument["value"].strip()
+            filename = self.get_argument(call, "FileName")
+            if not filename:
+                filename = self.get_argument(call, "DirectoryName")
             if filename:
                 if filename not in self.files:
                     self.files.append(filename)
                 if filename not in self.delete_files:
                     self.delete_files.append(filename)
         elif call["api"].startswith("StartService"):
-            servicename = None
-            for argument in call["arguments"]:
-                if argument["name"] == "ServiceName":
-                    servicename = argument["value"].strip()
+            servicename = self.get_argument(call, "ServiceName", strip=True)
             if servicename and servicename not in self.started_services:
                 self.started_services.append(servicename)
 
         elif call["api"].startswith("CreateService"):
-            servicename = None
-            for argument in call["arguments"]:
-                if argument["name"] == "ServiceName":
-                    servicename = argument["value"].strip()
+            servicename = self.get_argument(call, "ServiceName", strip=True)
             if servicename and servicename not in self.created_services:
                 self.created_services.append(servicename)
 
+        elif call["api"] == "CreateProcessInternalW" or call["api"] == "NtCreateUserProcess":
+            cmdline = self.get_argument(call, "CommandLine", strip=True)
+            if cmdline and cmdline not in self.executed_commands:
+                self.executed_commands.append(cmdline)
+
+        elif call["api"] == "LdrGetProcedureAddress" and call["status"]:
+            dllname = self.get_argument(call, "ModuleName").lower()
+            funcname = self.get_argument(call, "FunctionName")
+            if not funcname:
+                funcname = "#" + str(self.get_argument(call, "Ordinal"))
+            combined = dllname + "." + funcname
+            if combined not in self.resolved_apis:
+                self.resolved_apis.append(combined)
+
+        elif call["api"].startswith("NtCreateProcess"):
+            cmdline = self.get_argument(call, "FileName")
+            if cmdline and cmdline not in self.executed_commands:
+                self.executed_commands.append(cmdline)
+
         elif call["api"] == "MoveFileWithProgressW":
-            origname = None
-            newname = None
-            for argument in call["arguments"]:
-                if argument["name"] == "ExistingFileName":
-                    origname = argument["value"].strip()
-                elif argument["name"] == "NewFileName":
-                    newname = argument["value"].strip()
+            origname = self.get_argument(call, "ExistingFileName")
+            newname = self.get_argument(call, "NewFileName")
             if origname:
                 if origname not in self.files:
                     self.files.append(origname)
@@ -549,21 +561,15 @@ class Summary:
                     self.write_files.append(newname)
 
         elif call["category"] == "filesystem":
-            filename = None
-            srcfilename = None
-            dstfilename = None
+            filename = self.get_argument(call, "FileName")
+            if not filename:
+                filename = self.get_argument(call, "DirectoryName")
+            srcfilename = self.get_argument(call, "ExistingFileName")
+            dstfilename = self.get_argument(call, "NewFileName")
             access = None
-            for argument in call["arguments"]:
-                if argument["name"] == "FileName":
-                    filename = argument["value"].strip()
-                elif argument["name"] == "DirectoryName":
-                    filename = argument["value"].strip()
-                elif argument["name"] == "ExistingFileName":
-                    srcfilename = argument["value"].strip()
-                elif argument["name"] == "NewFileName":
-                    dstfilename = argument["value"].strip()
-                elif argument["name"] == "DesiredAccess":
-                    access = int(argument["value"], 16)
+            accessval = self.get_argument(call, "DesiredAccess")
+            if accessval:
+                access = int(accessval, 16)
             if filename:
                 if access and (access & 0x80000000 or access & 0x10000000 or access & 0x02000000 or access & 0x1) and filename not in self.read_files:
                     self.read_files.append(filename)
@@ -584,20 +590,15 @@ class Summary:
 
 
         elif call["category"] == "synchronization":
-            for argument in call["arguments"]:
-                if argument["name"] == "MutexName":
-                    value = argument["value"].strip()
-                    if not value:
-                        continue
-
-                    if value not in self.mutexes:
-                        self.mutexes.append(value)
+            value = self.get_argument(call, "MutexName")
+            if value and value not in self.mutexes:
+                self.mutexes.append(value)
 
     def run(self):
         """Get registry keys, mutexes and files.
         @return: Summary of keys, read keys, written keys, mutexes and files.
         """
-        return {"files": self.files, "read_files" : self.read_files, "write_files" : self.write_files, "delete_files" : self.delete_files, "keys": self.keys, "read_keys": self.read_keys, "write_keys": self.write_keys, "delete_keys" : self.delete_keys, "mutexes": self.mutexes, "created_services" : self.created_services, "started_services" : self.started_services }
+        return {"files": self.files, "read_files" : self.read_files, "write_files" : self.write_files, "delete_files" : self.delete_files, "keys": self.keys, "read_keys": self.read_keys, "write_keys": self.write_keys, "delete_keys" : self.delete_keys, "executed_commands" : self.executed_commands, "resolved_apis" : self.resolved_apis, "mutexes": self.mutexes, "created_services" : self.created_services, "started_services" : self.started_services }
 
 class Enhanced(object):
     """Generates a more extensive high-level representation than Summary."""
@@ -1032,14 +1033,20 @@ class ProcessTree:
         @return: boolean with operation success status.
         """
         # Walk through the existing tree.
+        ret = False
         for process in tree:
             # If the current process has the same ID of the parent process of
             # the provided one, append it the children.
             if process["pid"] == node["parent_id"]:
                 process["children"].append(node)
+                ret = True
+                break
             # Otherwise try with the children of the current process.
             else:
-                self.add_node(node, process["children"])
+                if self.add_node(node, process["children"]):
+                    ret = True
+                    break
+        return ret
 
     def event_apicall(self, call, process):
         for entry in self.processes:
@@ -1063,10 +1070,13 @@ class ProcessTree:
             has_parent = False
             # Walk through the list again.
             for process_again in self.processes:
+                if process_again == process:
+                    continue
                 # If we find a parent for the first process, we mark it as
                 # as a child.
                 if process_again["pid"] == process["parent_id"]:
                     has_parent = True
+                    break
 
             # If the process has a parent, add it to the children list.
             if has_parent:
@@ -1077,7 +1087,8 @@ class ProcessTree:
 
         # Now we loop over the remaining child processes.
         for process in children:
-            self.add_node(process, self.tree)
+            if not self.add_node(process, self.tree):
+                self.tree.append(process)
 
         return self.tree
 

@@ -31,7 +31,8 @@
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#filecreate">Example</a></td>
             </tr>
             <tr class="collapse" id="filecreate">
-                <td colspan="5"><pre>curl -F file=@/path/to/file -F machine="VM-Name" {{ config.api.url }}/api/tasks/create/file/<br />Note: machine is optional.</pre></td>
+                <td colspan="5"><pre>curl -F file=@/path/to/file -F machine="VM-Name" {{ config.api.url }}/api/tasks/create/file/
+Note: machine is optional.</pre></td>
             </tr>
             <tr>
                 <td>URL Create</td>
@@ -46,7 +47,7 @@
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#urlcreate">Example</a></td>
             </tr>
             <tr class="collapse" id="urlcreate">
-              <td colspan="5"><pre>curl -F url="somebadness.tld" -F {{ config.api.url }}/api/tasks/create/file/</pre></td>
+              <td colspan="5"><pre>curl -F url="somebadness.tld" {{ config.api.url }}/api/tasks/create/url/</pre></td>
             </tr>
             <tr>
                 <td>File View</td>
@@ -61,10 +62,13 @@
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#fileview">Example</a></td>
             </tr>
             <tr class="collapse" id="fileview">
-              <td colspan="5"><pre>curl {{ config.api.url }}/api/files/view/md5/[md5 hash]/<br />curl {{ config.api.url }}/api/files/view/sha256/[sha256 hash]/<br />curl {{ config.api.url }}/api/files/view/id/[sample id]/</pre></td>
+              <td colspan="5"><pre>curl {{ config.api.url }}/api/files/view/md5/[md5 hash]/
+curl {{ config.api.url }}/api/files/view/sha1/[sha1 hash]/
+curl {{ config.api.url }}/api/files/view/sha256/[sha256 hash]/
+curl {{ config.api.url }}/api/files/view/id/[sample id]/</pre></td>
             </tr>
             <tr>
-                <td>Task Search</td>
+                <td>Basic Task Search</td>
                 {% if config.tasksearch.enabled %}
                 <td><span class="label label-success">Yes</span></td>
                 {% else %}
@@ -76,7 +80,56 @@
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#tasksearch">Example</a></td>
             </tr>
             <tr class="collapse" id="tasksearch">
-              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/search/md5/[md5 hash]/<br />curl {{ config.api.url }}/api/tasks/search/sha256/[sha256 hash]/</pre></td>
+              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/search/md5/[md5 hash]/
+curl {{ config.api.url }}/api/tasks/search/sha1/[sha1 hash]/
+curl {{ config.api.url }}/api/tasks/search/sha256/[sha256 hash]/</pre></td>
+            </tr>
+            <tr>
+                <td>Extended Task Search</td>
+                {% if config.extendedtasksearch.enabled %}
+                <td><span class="label label-success">Yes</span></td>
+                {% else %}
+                <td><span class="label label-danger">No</span></td>
+                {% endif %}
+                <td><ul><li>RPS: {{ config.extendedtasksearch.rps }}</li>
+                        <li>RPM: {{ config.extendedtasksearch.rpm }}</li></ul></td>
+                <td>Search for Task ID's that's in MongoDB by various options. Return object will be JSON.</td>
+                <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#extendedtasksearch">Example</a></td>
+            </tr>
+            <tr class="collapse" id="extendedtasksearch">
+              <td colspan="5"><pre>curl -d "option=[option]&argument=[argument]" {{ config.api.url }}/api/tasks/extendedsearch/
+
+Searchable Options List:
+name : Name of target file name
+type : Name of file type
+string : Match a string in the static analysis section
+ssdeep : Match an ssdeep hash
+crc32 : Match a CRC32 hash
+file : Match a file in the behavioral analysis summary
+command : Match an executed command
+resolvedapi : Match an API that a sample resolved
+key : Match a registry key in the behavioral analysis summary
+mutex : Match a mutex in the behavioral analysis summary
+domain : Match a resolved domain
+ip : Match a contacted IP Address
+signature : Match a Cuckoo signature description
+signame : Match a Cuckoo signature name
+malfamily: Match samples associated with malware family
+url : Match a URL target task (submitted URL task)
+imphash : Match an import hash
+iconhash: Match the exact hash of the icon associated with the PE
+iconfuzzy: Match a hash designed to match on similar-looking icons
+surialert : Match a suricata alert signature
+surihttp : Match suricata HTTP data
+suritls : Match suricata TLS data
+clamav : Match a Clam AV signature
+yaraname : Match a Yara signature name
+virustotal : Match a virustotal AV Signature
+comment : Match a comment posted to a specific task
+md5 : Targets with a specific MD5 hash
+sha1 : Targets with a specific SHA1 hash
+sha256 : Targets with a specific SHA256 hash
+sha512 : Targets with a specific SHA512 hash</pre></td>
             </tr>
             <tr>
                 <td>Tasks List</td>
@@ -91,7 +144,9 @@
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#tasklist">Example</a></td>
             </tr>
             <tr class="collapse" id="tasklist">
-              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/<br />curl {{ config.api.url }}/api/tasks/[limit]/ (specify a limit of tasks to return)<br />curl {{ config.api.url }}/api/tasks/[limit]/[offset]/ (specify a limit of tasks to return, offset by a specific amount)</pre></td>
+              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/list/
+curl {{ config.api.url }}/api/tasks/list/[limit]/ (specify a limit of tasks to return)
+curl {{ config.api.url }}/api/tasks/list/[limit]/[offset]/ (specify a limit of tasks to return, offset by a specific amount)</pre></td>
             </tr>
             <tr>
                 <td>Task View</td>
@@ -171,7 +226,7 @@ curl {{ config.api.url }}/api/tasks/get/report/[task id]/[format]/
 Note: Format can be json/maec/metadata/all.</pre></td>
             </tr>
             <tr>
-                <td>Task IOC's</td>
+                <td>Task IOCs</td>
                 {% if config.taskiocs.enabled %}
                 <td><span class="label label-success">Yes</span></td>
                 {% else %}
@@ -179,7 +234,7 @@ Note: Format can be json/maec/metadata/all.</pre></td>
                 {% endif %}
                 <td><ul><li>RPS: {{ config.taskiocs.rps }}</li>
                         <li>RPM: {{ config.taskiocs.rpm }}</li></ul></td>
-                <td>View objects of the task report that may contain potential IOC's. Return object will be JSON.</td>
+                <td>View objects of the task report that may contain potential IOCs. Return object will be JSON.</td>
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#taskiocs">Example</a></td>
             </tr>
             <tr class="collapse" id="taskiocs">
@@ -200,7 +255,7 @@ curl {{ config.api.url }}/api/tasks/get/iocs/[task id]/detailed/</pre></td>
             </tr>
             <tr class="collapse" id="taskscreenshot">
               <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/get/screenshot/[task id]/    (Downloads all screenshots)
-curl {{ config.api.url }}/api/tasks/get/screenshot/[screenshot number]/[task id]/</pre></td>
+curl {{ config.api.url }}/api/tasks/get/screenshot/[task id]/[screenshot number]/</pre></td>
             </tr>
             <tr>
                 <td>Task PCAP</td>
@@ -216,6 +271,36 @@ curl {{ config.api.url }}/api/tasks/get/screenshot/[screenshot number]/[task id]
             </tr>
             <tr class="collapse" id="taskpcap">
               <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/get/pcap/[task id]/</pre></td>
+            </tr>
+            <tr>
+                <td>Task Dropped Files</td>
+                {% if config.taskdropped.enabled %}
+                <td><span class="label label-success">Yes</span></td>
+                {% else %}
+                <td><span class="label label-danger">No</span></td>
+                {% endif %}
+                <td><ul><li>RPS: {{ config.taskdropped.rps }}</li>
+                        <li>RPM: {{ config.taskdropped.rpm }}</li></ul></td>
+                <td>Download the dropped files associated with a Task by ID. Return object will be octet-stream. (.tar.bz2)</td>
+                <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#taskdropped">Example</a></td>
+            </tr>
+            <tr class="collapse" id="taskdropped">
+              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/get/dropped/[task id]/</pre></td>
+            </tr>
+            <tr>
+                <td>Task SuriFiles</td>
+                {% if config.tasksurifile.enabled %}
+                <td><span class="label label-success">Yes</span></td>
+                {% else %}
+                <td><span class="label label-danger">No</span></td>
+                {% endif %}
+                <td><ul><li>RPS: {{ config.tasksurifile.rps }}</li>
+                        <li>RPM: {{ config.tasksurifile.rpm }}</li></ul></td>
+                <td>Download the Suricata captured files associated with a Task by ID. Return object will be octet-stream. (.zip)</td>
+                <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#tasksurifile">Example</a></td>
+            </tr>
+            <tr class="collapse" id="tasksurifile">
+              <td colspan="5"><pre>curl {{ config.api.url }}/api/tasks/get/surifile/[task id]/</pre></td>
             </tr>
             <tr>
                 <td>Task Process Dump</td>
@@ -257,12 +342,13 @@ curl {{ config.api.url }}/api/tasks/get/procmemory/[task id]/[pid]/</pre></td>
                 {% endif %}
                 <td><ul><li>RPS: {{ config.sampledl.rps }}</li>
                         <li>RPM: {{ config.sampledl.rpm }}</li></ul></td>
-                <td>Download a sample from a Task by Task ID/MD5/SHA256. Return object will be octet-stream. (.bin)</td>
+                <td>Download a sample from a Task by Task ID/MD5/SHA1/SHA256. Return object will be octet-stream. (.bin)</td>
                 <td><a class="accordion-toggle" data-toggle="collapse" data-parent="#accordion" href="#sampledl">Example</a></td>
             </tr>
             <tr class="collapse" id="sampledl">
               <td colspan="5"><pre>curl {{ config.api.url }}/api/files/get/task/[task id]/
 curl {{ config.api.url }}/api/files/get/md5/[md5 hash]/
+curl {{ config.api.url }}/api/files/get/sha1/[sha1 hash]/
 curl {{ config.api.url }}/api/files/get/sha256/[sha256 hash]/</pre></td>
             </tr>
             <tr>

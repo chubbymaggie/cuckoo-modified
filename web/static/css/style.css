@@ -5,6 +5,12 @@ body {
     padding-top: 60px;
     background: #ffffff url('/static/graphic/background.png') repeat-x;
 }
+
+@page {
+    size: A3;
+    margin: 1cm;
+}
+
 @media (max-width: 979px) {
     body {
         padding-top: 0px;
@@ -111,6 +117,9 @@ a.tag-label {
 }
 .synchronization {
     background-color: #f9c5ff;
+}
+.browser {
+    background-color: #dfffdf;
 }
 .crypto {
     background-color: #f0f2c5;

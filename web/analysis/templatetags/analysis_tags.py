@@ -1,5 +1,10 @@
-import re
+try:
+    import re2 as re
+except ImportError:
+    import re
+
 from django.template.defaultfilters import register
+from collections import OrderedDict
 
 @register.filter("mongo_id")
 def mongo_id(value):
@@ -25,3 +30,21 @@ def get_item(dictionary, key):
 @register.filter(name="dehex")
 def dehex(value):
     return re.sub(r"\\x[0-9a-f]{2}", "", value)
+
+@register.filter(name="stats_total")
+def stats_total(value):
+    total = float()
+    for item in value:
+       total += item["time"]
+
+    return total
+
+@register.filter(name="sort")
+def sort(value):
+    if isinstance(value, dict):
+        sorteddict = OrderedDict()
+        sortedkeys = sorted(value.keys())
+        for key in sortedkeys:
+            sorteddict[key] = value[key]
+        return sorteddict
+    return value

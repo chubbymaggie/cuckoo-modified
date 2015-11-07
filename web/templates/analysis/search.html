@@ -48,8 +48,24 @@
                         <td>Search for PE Imphash</td>
                     </tr>
                     <tr>
+                        <td><code>iconhash:</code></td>
+                        <td>Search for exact hash of the icon associated with the PE</td>
+                    </tr>
+                    <tr>
+                        <td><code>iconfuzzy:</code></td>
+                        <td>Search for hash designed to match on similar-looking icons</td>
+                    </tr>
+                    <tr>
                         <td><code>file:</code></td>
                         <td>Open files matching the pattern</td>
+                    </tr>
+                    <tr>
+                        <td><code>command:</code></td>
+                        <td>Executed commands matching the pattern</td>
+                    </tr>
+                    <tr>
+                        <td><code>resolvedapi:</code></td>
+                        <td>APIs resolved at runtime matching the pattern</td>
                     </tr>
                     <tr>
                         <td><code>key:</code></td>
@@ -72,12 +88,20 @@
                         <td>Search for Cuckoo Sandbox URL analysis</td>
                     </tr>
                     <tr>
+                        <td><code>signame:</code></td>
+                        <td>Search for Cuckoo Sandbox signatures through signature names</td>
+                    </tr>
+                    <tr>
                         <td><code>signature:</code></td>
-                        <td>Search for Cuckoo Sandbox signatures</td>
+                        <td>Search for Cuckoo Sandbox signatures through signature descriptions</td>
+                    </tr>
+                    <tr>
+                        <td><code>malfamily:</code></td>
+                        <td>Search for samples associated with malware family</td>
                     </tr>
                     <tr>
                         <td><code>surialert:</code></td>
-                        <td>Search for Suricata Alerts </td>
+                        <td>Search for Suricata Alerts</td>
                     </tr>
                     <tr>
                         <td><code>suritls:</code></td>
@@ -85,23 +109,27 @@
                     </tr>
                     <tr>
                         <td><code>surihttp:</code></td>
-                        <td>Search for Suricata TLS</td>
+                        <td>Search for Suricata HTTP</td>
                     </tr>
                     <tr>
                         <td><code>clamav:</code></td>
-                        <td>Local ClamAV</td>
+                        <td>Local ClamAV detections</td>
                     </tr>
                     <tr>
                         <td><code>yaraname:</code></td>
-                        <td>Yara Rule Name</td>
+                        <td>Yara Rule Name for analysis samples</td>
                     </tr>
                     <tr>
-                        <td><code>strings:</code></td>
-                        <td>Target Strings</td>
+                        <td><code>procmemyara:</code></td>
+                        <td>Yara Rule Name for process memory dumps</td>
                     </tr>
                     <tr>
                         <td><code>virustotal:</code></td>
                         <td>Virus Total Detected Name</td>
+                    </tr>
+                    <tr>
+                        <td><code>comment:</code></td>
+                        <td>Search for Analysis Comments</td>
                     </tr>
                 </tbody>
             </table>
@@ -120,17 +148,21 @@
             <table class="table table-striped" style="table-layout: fixed;">
                 <thead>
                 <tr>
-                    <th width="3%">ID</th>
+                    <th width="5%">ID</th>
                     <th width="12%">Timestamp</th>
-                    <th width="33%">Filename</th>
-                    <th width="15%">Target/MD5</th>
-                    <th width="5%">VT</th>
-                    <th width="5%">SuriAlert</th>
-                    <th width="5%">SuriHTTP</th>
-                    <th width="5%">SuriTLS</th>
-                    <th width="5%">SuriFiles</th>
+                    <th width="37%">Filename</th>
+                    <th width="20%">Target/MD5</th>
+                    {% if config.moloch %}
                     <th width="5%">Moloch</th>
-                    <th width="7%" style="text-align: right;">Status</th>
+                    {% endif %}
+                    {% if config.suricata %}
+                    <th width="5%">SuriAlert</th>
+                    {% endif %}
+                    {% if config.virustotal %}
+                    <th width="5%">VT</th>
+                    {% endif %}
+                    <th width="5%">MalScore</th>
+                    <th width="6%" style="text-align: right;">Status</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -153,58 +185,62 @@
                             {% if analysis.status == "reported" %}
                                 <a href="{% url "analysis.views.report" analysis.id %}">
                                 {% if analysis.category == "url" %}
-                                    <span class="mono">{{analysis.target}}</span></a>
+                                    <span class="mono">{{analysis.target}}</span>
                                 {% else %}
-                                    <span class="mono">{{analysis.sample.md5}}</span></a>
-                                {% endif %}</a>
+                                    <span class="mono">{{analysis.sample.md5}}</span>
+                                {% endif %}
+                                </a>
                             {% else %}
                                 {% if analysis.category == "url" %}
-                                    <span class="mono">{{analysis.target}}</span></a>
+                                    <span class="mono">{{analysis.target}}</span>
                                 {% else %}
-                                    <span class="mono">{{analysis.sample.md5}}</span></a>
+                                    <span class="mono">{{analysis.sample.md5}}</span>
                                 {% endif %}
                             {% endif %}
                         </td>
-                        <td>
-                            {% if analysis.virustotal_summary %}
-                                <span class="mono">{{analysis.virustotal_summary}}</span>
-                            {% else %}
-                                  <span class="mono">None</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if analysis.suri_alert_cnt %}
-                                <span class="mono">{{analysis.suri_alert_cnt}}</span>
-                            {% else %}
-                                  <span class="mono">None</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if analysis.suri_http_cnt %}
-                                <span class="mono">{{analysis.suri_http_cnt}}</span>
-                            {% else %}
-                                  <span class="mono">None</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if analysis.suri_tls_cnt %}
-                                <span class="mono">{{analysis.suri_tls_cnt}}</span>
-                            {% else %}
-                                  <span class="mono">None</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if analysis.suri_file_cnt %}
-                                <span class="mono">{{analysis.suri_file_cnt}}</span>
-                            {% else %}
-                                  <span class="mono">None</span>
-                            {% endif %}
-                        </td>
+                        {% if config.moloch %}
                         <td>
                             {% if analysis.moloch_url %}
                                 <a href={{analysis.moloch_url}} target="_blank"><span class="mono">MOLOCH</span></a>
                             {% else %}
-                                  <span class="mono">None</span>
+                                <span class="mono">None</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        {% if config.suricata %}
+                        <td>
+                            {% if analysis.suri_alert_cnt %}
+                                <span class="mono">{{analysis.suri_alert_cnt}}</span>
+                            {% else %}
+                                <span class="mono">None</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        {% if config.virustotal %}
+                        <td>
+                            {% if analysis.virustotal_summary %}
+                                <span class="mono">{{analysis.virustotal_summary}}</span>
+                            {% else %}
+                                <span class="mono">None</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        <td>
+                            {% if analysis.malscore != None %}
+                                <span 
+                                {% if analysis.malscore <= 2.0 %}
+                                class="label label-success"
+                                {% elif analysis.malscore <= 6.0 %}
+                                class="label label-warning"
+                                {% else %}
+                                class="label label-danger"
+                                {% endif %}
+                                {% if analysis.malfamily %}
+                                title="{{analysis.malfamily}}"
+                                {% endif %}
+                                >{{analysis.malscore|floatformat:1}}</span>
+                            {% else %}
+                                <span class="mono">None</span>
                             {% endif %}
                         </td>
                         <td style="text-align: right;">
@@ -213,7 +249,7 @@
                             {% elif analysis.status == "running" %}
                                 <span class="text-warning">running</span>
                             {% elif analysis.status == "completed" %}
-                                <span class="text-info">completed</span>
+                                <span class="text-info">processing</span>
                             {% elif analysis.status == "reported" %}
                                 {% if analysis.errors %}
                                     <span class="text-danger">

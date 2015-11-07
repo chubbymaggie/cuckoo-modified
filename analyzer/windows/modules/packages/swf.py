@@ -3,21 +3,16 @@
 # See the file 'docs/LICENSE' for copying permission.
 
 from lib.common.abstracts import Package
-from lib.api.process import Process
 
 class SWF(Package):
     """Shockwave Flash analysis package.
         Download a version of standalone flash from adobe and 
         place in bin/ as flashplayer.exe to use
+
+        You can find the bundles you want here: 
+        https://helpx.adobe.com/flash-player/kb/archived-flash-player-versions.html
+        You want the debug folder (in the zip). The filename will have 'sa' (stand-alone) in it
     """
 
     def start(self, path):
-        p = Process()
-        free = self.options.get("free")
-        dll = self.options.get("dll")
-        p.execute(path="bin/flashplayer.exe", args=path, suspended=True)
-        p.inject(dll, path)
-        p.resume()
-        if free:
-            return None
-        return p.pid
+        return self.execute("bin/flashplayer.exe", path, path)

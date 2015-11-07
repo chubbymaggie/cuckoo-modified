@@ -10,18 +10,22 @@ ADVAPI32 = windll.advapi32
 USER32   = windll.user32
 
 BYTE      = c_ubyte
+USHORT    = c_ushort
 WORD      = c_ushort
-DWORD     = c_ulong
-LONG      = c_ulong
+DWORD     = c_uint
+LONG      = c_int
+ULONG     = c_uint
+UINT64    = c_ulonglong
 LPBYTE    = POINTER(c_ubyte)
 LPTSTR    = POINTER(c_char)
 HANDLE    = c_void_p
 PVOID     = c_void_p
 LPVOID    = c_void_p
-UINT_PTR  = c_ulong
-SIZE_T    = c_ulong
+UINT_PTR  = c_void_p
+ULONG_PTR = c_void_p
+SIZE_T    = c_void_p
 HMODULE   = c_void_p
-NULL      = c_int(0)
+PWCHAR    = c_wchar_p
 
 DEBUG_PROCESS             = 0x00000001
 CREATE_NEW_CONSOLE        = 0x00000010
@@ -33,12 +37,6 @@ THREAD_ALL_ACCESS         = 0x001f03ff
 TOKEN_ALL_ACCESS          = 0x000F01FF
 SE_PRIVILEGE_ENABLED      = 0x00000002
 STILL_ACTIVE              = 0x00000103
-
-PAGE_EXECUTE_READWRITE    = 0x00000040
-PAGE_EXECUTE              = 0x00000010
-PAGE_EXECUTE_READ         = 0x00000020
-PAGE_READONLY             = 0x00000002
-PAGE_READWRITE            = 0x00000004
 
 MEM_COMMIT                = 0x00001000
 MEM_RESERVE               = 0x00002000
@@ -63,6 +61,7 @@ PAGE_NOCACHE              = 0x00000200
 PAGE_WRITECOMBINE         = 0x00000400
 
 PIPE_ACCESS_DUPLEX        = 0x00000003
+PIPE_ACCESS_INBOUND       = 0x00000001
 PIPE_TYPE_MESSAGE         = 0x00000004
 PIPE_READMODE_MESSAGE     = 0x00000002
 PIPE_WAIT                 = 0x00000000
@@ -80,6 +79,7 @@ FILE_ATTRIBUTE_HIDDEN     = 0x00000002
 
 WM_GETTEXT                = 0x0000000D
 WM_GETTEXTLENGTH          = 0x0000000E
+WM_CLOSE                  = 0x00000010
 BM_CLICK                  = 0x000000F5
 
 GENERIC_READ              = 0x80000000
@@ -88,6 +88,9 @@ GENERIC_WRITE             = 0x40000000
 OPEN_EXISTING             = 0x00000003
 
 TH32CS_SNAPPROCESS        = 0x02L
+
+GMEM_MOVEABLE             = 0x0002
+CF_TEXT                   = 0x0001
 
 class STARTUPINFO(Structure):
     _fields_ = [
@@ -187,3 +190,26 @@ class SYSTEM_INFO(Structure):
         ("wProcessorLevel", WORD),
         ("wProcessorRevision", WORD),
     ]
+
+class UNICODE_STRING(Structure):
+	_pack_ = 1
+	_fields_ = [
+		("Length", USHORT),
+		("MaximumLength", USHORT),
+		("Buffer", PWCHAR),
+	]
+
+class SYSTEM_PROCESS_INFORMATION(Structure):
+	_fields_ = [
+		("NextEntryOffset", ULONG),
+		("NumberOfThreads", ULONG),
+		("Reserved0", UINT64),
+		("Reserved1", UINT64),
+		("Reserved2", UINT64),
+		("CreateTime", UINT64),
+		("UserTime", UINT64),
+		("KernelTime", UINT64),
+		("ImageName", UNICODE_STRING),
+		("BasePriority", ULONG),
+		("UniqueProcessId", PVOID),
+	]

@@ -1,4 +1,4 @@
-# Copyright (C) 2015 Accuvant, Inc. (bspengler@accuvant.com)
+# Copyright (C) 2015 Optiv, Inc. (brad.spengler@optiv.com)
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -15,8 +15,8 @@ log = logging.getLogger(__name__)
 class Browser(Auxiliary, Thread):
     """Launch a browser 30 seconds into the analysis"""
 
-    def __init__(self, options):
-        Auxiliary.__init__(self, options)
+    def __init__(self, options, config):
+        Auxiliary.__init__(self, options, config)
         Thread.__init__(self)
         self.do_run = True
         self.seconds_elapsed = 0
@@ -31,7 +31,7 @@ class Browser(Auxiliary, Thread):
             return True
 
         while self.do_run:
-            time.sleep(1000)
+            time.sleep(1)
             self.seconds_elapsed = self.seconds_elapsed + 1
             if self.seconds_elapsed == 30:
                 iexplore = os.path.join(os.getenv("ProgramFiles"), "Internet Explorer", "iexplore.exe")
